@@ -1,0 +1,609 @@
+---
+title: "210531_Analysis_of_FNANA"
+output: html_notebook
+---
+
+```{r}
+#Install packages:
+install.packages("ggfortify")
+install.packages("calibrate")
+install.packages("BiocManager")
+BiocManager::install(c("edgeR"))
+BiocManager::install(c("biomaRt"))
+BiocManager::install(c("DOSE"))
+BiocManager::install(c("clusterProfiler","Rgraphviz","DOSE"))
+BiocManager::install(c("org.Mm.eg.db"))
+```
+
+#### re-install originally used versions for GO analysis
+```{r}
+#used IRanges_2.18.3
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/bin/macosx/el-capitan/contrib/3.6/IRanges_2.18.3.tgz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used S4Vectors_0.22.1
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/bin/macosx/el-capitan/contrib/3.6/S4Vectors_0.22.1.tgz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used BiocGenerics_0.30.0
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/src/contrib/BiocGenerics_0.30.0.tar.gz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#Install old version of org.Mm.eg.db (used 3.8.2).
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/data/annotation/src/contrib/org.Mm.eg.db_3.8.2.tar.gz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used clusterProfiler_3.12.0 on 190828
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/src/contrib/clusterProfiler_3.12.0.tar.gz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used DOSE_3.10.2
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/src/contrib/DOSE_3.10.2.tar.gz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used AnnotationDbi_1.46.1
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/src/contrib/AnnotationDbi_1.46.1.tar.gz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used Biobase_2.44.0
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/bin/macosx/el-capitan/contrib/3.6/Biobase_2.44.0.tgz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+```{r}
+#used biomaRt_2.40.5
+packageurl <- "http://bioconductor.riken.jp/packages/3.9/bioc/src/contrib/biomaRt_2.40.5.tar.gz"
+install.packages(packageurl, repos=NULL, type="source")
+```
+
+#### Load packages:
+```{r}
+library(edgeR)
+library(ggplot2)
+library(ggfortify)
+library(biomaRt)
+library(calibrate)
+library(DOSE)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(tidyr)
+library(dplyr)
+library(ggrepel)
+library(pheatmap)
+```
+
+```{r}
+sessionInfo()
+```
+
+#### Load data:
+```{r}
+counts <- read.delim("~/Desktop/171106_FNANA.clean.readCount", row.names = 1)
+head(counts)
+```
+
+#### Remove genes without any counts in any samples:
+```{r}
+counts_wco=counts[(rowSums(counts>0)>=1),]
+```
+
+#### Select 0h columns:
+```{r}
+cols_0h=c(1,3,6,8,10,13,15,17,20)
+hour0_SS=counts_wco[,cols_0h]
+head(hour0_SS)
+
+#remove additional zero counts:
+hour0_SS_wco=hour0_SS[(rowSums(hour0_SS>0)>=1),]
+```
+
+#### edgeR (DEG) analysis
+```{r}
+#For easy manipulation, we put the data into a DGEList object:
+y_0h=DGEList(hour0_SS_wco)
+
+#TMM normalization is applied to this dataset to account for compositional difference between the libraries.
+y_0h = calcNormFactors(y_0h)
+```
+
+```{r}
+#Before we fit negative binomial generalized linear models (GLMs), we need to define our design matrix based on the experimental design:
+Experiment <- factor(c(rep(c(1,2,3), each=3)))
+
+Treatment <- factor(c("F.NANA","GM.CSF","P.NANA","F.NANA","GM.CSF","P.NANA","F.NANA","GM.CSF","P.NANA"))
+
+design_0h <- model.matrix(~Experiment+Treatment)
+
+rownames(design_0h) <- colnames(y_0h)
+
+#print the design matrix:
+design_0h
+```
+
+```{r}
+#First we estimate the overall dispersion for the dataset, to get an idea of the overall level of biological variability:
+y_0h <- estimateGLMCommonDisp(y_0h, design=design_0h, verbose=TRUE)
+
+#Now proceed to determine differentially expressed genes. Fit genewise GLMs
+fit_0h <- glmFit(y_0h, design_0h)
+```
+
+```{r}
+#F.NANA is base!
+
+#Conduct likelihood ratio tests for differences in treatments and show the top genes:
+lrt_0h_GvsF <- glmLRT(fit_0h, coef=4)
+topTags(lrt_0h_GvsF)
+summary(decideTestsDGE(lrt_0h_GvsF))
+```
+
+#### Add official gene symbols to lists and write the results of the DE analysis to a table:
+```{r}
+results_0h_GvsF <- topTags(lrt_0h_GvsF,n = length(y_0h$counts[,1]))
+```
+
+```{r}
+mart <- useMart("ENSEMBL_MART_ENSEMBL", dataset = "mmusculus_gene_ensembl",host="www.ensembl.org")
+ensembl2name <- getBM(attributes=c("ensembl_gene_id","external_gene_name"),mart=mart)
+```
+
+```{r}
+results_0h_GvsF <- merge(x=results_0h_GvsF$table, y=ensembl2name, by.x=0, by.y=1, all.x=TRUE)
+```
+
+```{r}
+write.table(as.matrix(results_0h_GvsF),file="~/Desktop/200120_0h_GvsF_DEG",sep="\t")
+```
+
+#### Export normalized count values
+```{r}
+#write.table(as.matrix(fit_0h$fitted.values),file="~/Desktop/200120_0h_norm.counts",sep="\t")
+```
+
+#### Reload the results
+```{r}
+results_0h_GvsF = read.delim("~/Desktop/200120_DEG_and_normCounts/200120_0h_GvsF_DEG",sep="\t")
+```
+
+```{r}
+#select significant genes by FDR:
+results_0h_GvsF_FDRsig = results_0h_PvsF[results_0h_GvsF$FDR<0.05,]
+nrow(results_0h_GvsF_FDRsig)
+```
+
+```{r}
+#select top 250 up/down genes:
+results_0h_GvsF_FDRsig_top250 = bind_rows(top_n(results_0h_GvsF_FDRsig, 250, logFC), top_n(results_0h_GvsF_FDRsig, -250, logFC))
+```
+
+
+#Gene Ontology on top 250 up or downregulated significant genes
+###Note: It's better to use ENSEMBL or ENTREZ IDs for the GO analysis.
+
+#### Biological Process GO analysis
+```{r}
+results_0h_GvsF_FDRsig_top250_BP <- enrichGO(gene = results_0h_GvsF_FDRsig_top250$Row.names,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Mm.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(results_0h_GvsF_FDRsig_top250_BP))
+```
+
+```{r}
+##write the analysis results to file:
+write.table(as.matrix(summary(results_0h_GvsF_FDRsig_top250_BP)),file="~/Desktop/200507_results_0h_GvsF_FDRsig_top250_BP.txt",sep="\t")
+```
+
+
+#### Molecular Functions GO analysis
+```{r}
+results_0h_GvsF_FDRsig_top250_MF <- enrichGO(gene = results_0h_GvsF_FDRsig_top250$Row.names,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Mm.eg.db,
+                ont           = "MF",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(results_0h_GvsF_FDRsig_top250_MF))
+```
+
+```{r}
+#write the analysis results to file:
+write.table(as.matrix(summary(results_0h_GvsF_FDRsig_top250_MF)),file="~/Desktop/200201_results_0h_GvsF_FDRsig_top250_MF.txt",sep="\t")
+```
+
+#### re-load results
+```{r}
+#reload GO/KEGG results
+results_0h_GvsF_FDRsig_top250_BP = read.delim("~/Desktop/NANA_input/200201_GO_KEGG_FDR_Top250_Up_Down/200201_results_0h_GvsF_FDRsig_top250_BP.txt",sep="\t", row.names = 1)
+results_0h_GvsF_FDRsig_top250_MF = read.delim("~/Desktop/NANA_input/200201_GO_KEGG_FDR_Top250_Up_Down/200201_results_0h_GvsF_FDRsig_top250_MF.txt",sep="\t", row.names = 1)
+```
+
+```{r}
+#add column for decimal number of GeneRatio
+results_0h_GvsF_FDRsig_top250_MF = separate(data = results_0h_GvsF_FDRsig_top250_MF, col = GeneRatio, into = c("left", "right"), sep = "/")
+results_0h_GvsF_FDRsig_top250_MF$GeneRatio_decimal = (
+   as.numeric(results_0h_GvsF_FDRsig_top250_MF$left)/as.numeric(results_0h_GvsF_FDRsig_top250_MF$right))
+
+results_0h_GvsF_FDRsig_top250_BP = separate(data = results_0h_GvsF_FDRsig_top250_BP, col = GeneRatio, into = c("left", "right"), sep = "/")
+results_0h_GvsF_FDRsig_top250_BP$GeneRatio_decimal = (
+   as.numeric(results_0h_GvsF_FDRsig_top250_BP$left)/as.numeric(results_0h_GvsF_FDRsig_top250_BP$right))
+```
+
+
+```{r}
+y <- as.data.frame(results_0h_GvsF_FDRsig_top250_MF)
+head(y)
+y$Description <- factor(y$Description, levels = y$Description[order(y$GeneRatio_decimal)])
+y = y[0:15,]
+y = na.omit(y)
+gg1 = ggplot(y,
+      aes(x = 1, y = Description)) + 
+      geom_point(aes(size = Count, color = p.adjust))+# color = "black", pch = 21) +
+      theme_bw(base_size = 14) +
+      scale_colour_gradient(limits = c(0,0.05), low = "darkgreen", high="white", guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+      geom_point(aes(size = Count), color = "black", pch = 21) +
+      ylab(NULL) +
+      xlab(NULL) +
+      scale_x_discrete(expand=c(0,0))  +
+      guides(size = guide_legend(order = 1)) +
+      labs(size = "genes", color = "p value") +
+      theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+      ggtitle("0h_GvsF_FDRsig_top250_MF") +
+      theme(plot.title = element_text(hjust=1))
+gg1
+```
+
+```{r}
+pdf("~/Desktop/210102_0h_GvsF_FDRsig_top250_MF.pdf",width=6.2,height=3.6,paper='special') 
+gg1
+dev.off()
+```
+
+```{r}
+y <- as.data.frame(results_0h_GvsF_FDRsig_top250_BP)
+head(y)
+y$Description <- factor(y$Description, levels = y$Description[order(y$GeneRatio_decimal)])
+y = y[0:15,]
+y = na.omit(y)
+gg1 = ggplot(y,
+      aes(x = 1, y = Description)) + 
+      geom_point(aes(size = Count, color = p.adjust))+# color = "black", pch = 21) +
+      theme_bw(base_size = 14) +
+      scale_colour_gradient(limits = c(0,0.05), low = "darkgreen", high="white", guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+      geom_point(aes(size = Count), color = "black", pch = 21) +
+      ylab(NULL) +
+      xlab(NULL) +
+      scale_x_discrete(expand=c(0,0))  +
+      guides(size = guide_legend(order = 1)) +
+      labs(size = "genes", color = "p value") +
+      theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+      ggtitle("0h_GvsF_FDRsig_top250_BP") +
+      theme(plot.title = element_text(hjust=1))
+gg1
+```
+
+```{r}
+pdf("~/Desktop/210102_0h_GvsF_FDRsig_top250_BP.pdf",width=6.2,height=3.6,paper='special') 
+gg1
+dev.off()
+```
+
+### simplify GO BP results
+```{r}
+#re-load results
+results_0h_GvsF = read.delim("~/Desktop/200120_DEG_and_normCounts/200120_0h_GvsF_DEG",sep="\t")
+```
+
+```{r}
+#select significant genes by FDR:
+results_0h_GvsF_FDRsig = results_0h_PvsF[results_0h_GvsF$FDR<0.05,]
+nrow(results_0h_GvsF_FDRsig)
+```
+
+```{r}
+#select top 250 up/down genes:
+results_0h_GvsF_FDRsig_top250 = bind_rows(top_n(results_0h_GvsF_FDRsig, 250, logFC), top_n(results_0h_GvsF_FDRsig, -250, logFC))
+```
+
+```{r}
+#re-run the GO analysis
+results_0h_GvsF_FDRsig_top250_BP <- enrichGO(gene = results_0h_GvsF_FDRsig_top250$Row.names,
+                keyType       = 'ENSEMBL',
+                OrgDb         = org.Mm.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.05,
+                qvalueCutoff  = 0.05,
+                minGSSize     = 3,
+                readable      = TRUE)
+head(summary(results_0h_GvsF_FDRsig_top250_BP))
+```
+
+
+```{r}
+#simplify results
+results_0h_GvsF_FDRsig_top250_BP_simple30 = simplify(
+  results_0h_GvsF_FDRsig_top250_BP,
+  cutoff = 0.3,
+  by = "p.adjust",
+  select_fun = min,
+  measure = "Wang",
+  semData = NULL
+)
+```
+
+```{r}
+#export and re-import results
+write.table(as.matrix(summary(results_0h_GvsF_FDRsig_top250_BP_simple30)),file="~/Desktop/200507_results_0h_GvsF_FDRsig_top250_BP_simple30.txt",sep="\t")
+```
+
+```{r}
+results_0h_GvsF_FDRsig_top250_BP_simple30 = read.delim("~/Desktop/200507_results_0h_GvsF_FDRsig_top250_BP_simple30.txt",sep="\t", row.names = 1)
+```
+
+
+```{r}
+#add column for decimal number of GeneRatio
+results_0h_GvsF_FDRsig_top250_BP_simple30 = separate(data = results_0h_GvsF_FDRsig_top250_BP_simple30, col = GeneRatio, into = c("left", "right"), sep = "/")
+results_0h_GvsF_FDRsig_top250_BP_simple30$GeneRatio_decimal = (
+   as.numeric(results_0h_GvsF_FDRsig_top250_BP_simple30$left)/as.numeric(results_0h_GvsF_FDRsig_top250_BP_simple30$right))
+```
+
+```{r}
+y <- as.data.frame(results_0h_GvsF_FDRsig_top250_BP_simple30)
+head(y)
+y$Description <- factor(y$Description, levels = y$Description[order(y$GeneRatio_decimal)])
+y = y[0:15,]
+y = na.omit(y)
+gg2 = ggplot(y,
+      aes(x = 1, y = Description)) + 
+      geom_point(aes(size = Count, color = p.adjust))+# color = "black", pch = 21) +
+      theme_bw(base_size = 14) +
+      scale_colour_gradient(limits = c(0,0.05), low = "darkgreen", high="white", guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+      geom_point(aes(size = Count), color = "black", pch = 21) +
+      ylab(NULL) +
+      xlab(NULL) +
+      scale_x_discrete(expand=c(0,0))  +
+      guides(size = guide_legend(order = 1)) +
+      labs(size = "genes", color = "p value") +
+      theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+      ggtitle("0h_GvsF_FDRsig_top250_BP_simple30") +
+      theme(plot.title = element_text(hjust=1))
+gg2
+```
+
+```{r}
+pdf("~/Desktop/210507_0h_GvsF_FDRsig_top250_BP_simple30.pdf",width=6.2,height=3.6,paper='special') 
+gg2
+dev.off()
+```
+
+
+#### Beautify volcanoplots and highlight genes
+```{r}
+#Re-load data
+results_0h_GvsF = read.delim("~/Desktop/NANA_input/200120_0h_GvsF_DEG",sep="\t", row.names = 1)
+```
+
+```{r}
+# set values outside axis limits to Inf
+upper_FDR_limit = 70
+upper_logFC_limit = 15
+lower_logFC_limit = -15
+results_0h_GvsF_limits = results_0h_GvsF
+results_0h_GvsF_limits$logFDR = -log10(results_0h_GvsF$FDR)
+results_0h_GvsF_limits$logFDR[results_0h_GvsF_limits$logFDR > upper_FDR_limit] = Inf
+results_0h_GvsF_limits$logFC[results_0h_GvsF_limits$logFC > upper_logFC_limit] = upper_logFC_limit
+results_0h_GvsF_limits$logFC[results_0h_GvsF_limits$logFC < lower_logFC_limit] = lower_logFC_limit
+```
+
+```{r}
+results_0h_GvsF = results_0h_GvsF_limits
+```
+
+```{r}
+highlight_genes = c("kept secret until publication")
+```
+
+```{r}
+results_0h_GvsF_sub = subset(results_0h_GvsF, abs(logFC)>log2(2) & FDR<0.05)
+results_0h_GvsF_highlight = subset(results_0h_GvsF, results_0h_GvsF$external_gene_name %in% highlight_genes)
+
+vp_sign_sub_up = subset(results_0h_GvsF, logFC>0 & FDR<0.05)
+vp_sign_sub_dn = subset(results_0h_GvsF, logFC<0 & FDR<0.05)
+vp_non_sign = subset(results_0h_GvsF, FDR>0.05 | abs(logFC)<1)
+
+vp.results_0h_GvsF = ggplot(results_0h_GvsF) +
+  geom_point(
+      data = results_0h_GvsF,
+      aes(x = logFC, y = logFDR),
+      color = "grey",
+      alpha = 0.2,
+      cex = 1
+    ) +
+  geom_point(
+      data = subset(vp_sign_sub_up, FDR<0.05),
+      aes(x = logFC, y = logFDR),
+      fill = "blue",
+      alpha = 0.3,
+      color = "darkblue",
+      pch = 21
+    ) +
+  geom_point(
+      data = subset(vp_sign_sub_dn, FDR<0.05),
+      aes(x = logFC, y = logFDR),
+      fill = "red",
+      alpha = 0.3,
+      color = "darkred",
+      pch = 21
+    ) +
+    geom_text_repel(
+      data = results_0h_GvsF_highlight,
+      aes(x = logFC, y = logFDR, label=external_gene_name),
+      size = 5,
+      min.segment.length = 0, #use to always put a line,
+      box.padding = unit(0.35, "lines"),
+      point.padding = unit(0.3, "lines"),
+      segment.size = 1
+    ) +
+    theme_bw(base_size = 18) +
+    labs(x = "logFC", y = "-log10(FDR)") +
+    guides(size=guide_legend(override.aes=list(fill="white"))) +
+    ggtitle("vp.results_0h_GvsF")
+vp.results_0h_GvsF
+```
+
+```{r}
+pdf("~/Desktop/210531_0h_GvsF_Volcano.pdf",width=7,height=7,paper='special') 
+vp.results_0h_GvsF
+dev.off()
+```
+
+
+## Calculate TPM expression
+
+####Load data:
+```{r}
+counts_wl <- read.delim("~/Desktop/171106_FNANA.clean.readCount.withLength", row.names = 1)
+```
+
+#### Remove genes without any counts in any samples:
+```{r}
+counts_wl_wco=counts_wl[(rowSums(counts_wl>0)>=1),]
+```
+
+#### Add official gene name to the table
+```{r}
+info <- read.delim("~/Desktop/gencode.mouse.v1.annotation.gene_info.txt", row.names = 1)
+head(info)
+
+counts_wl_wco_name = merge(x=counts_wl_wco, y=info, by.x=0, by.y=0, all.x=TRUE)
+head(counts_wl_wco_name)
+```
+
+### TPM calculation
+```{r}
+counts_wl_tpm = counts_wl_wco_name[,3:23]
+RPK = counts_wl_tpm/counts_wl$Length
+RPK=RPK*1000
+head(RPK)
+
+sum_RPK = colSums(RPK)
+sum_RPK
+
+TPM= sweep(RPK,2,sum_RPK,`/`)
+TPM=TPM*10^6
+head(TPM)
+
+TPM = cbind(counts_wl_wco_name[,c(1,25)],TPM)
+head(TPM)
+
+write.table(as.matrix(TPM),file="~/Desktop/210417_FNANA_TPM.txt",sep="\t")
+```
+
+```{r}
+#reload TPM list
+TPM <- read.delim("~/Desktop/210417_FNANA_TPM.txt", row.names = 1)
+```
+
+
+##Heatmaps of selected genes
+
+####Load gene lists
+```{r}
+tlr_genes = read.delim("~/Desktop/210531_tlr_genes.txt", header = F)
+tlr_genes$order = rownames(tlr_genes)
+tlr_genes
+tlr_genes$order = as.factor(c(01,02,03,04,05,06,07,08,09,10:13))
+tlr_genes
+```
+
+#### Merge with TPM list
+```{r}
+heatmap_TPM_tlr = merge(x=tlr_genes, y=TPM, by.x=1, by.y=2, all.x=TRUE)
+rownames(heatmap_TPM_tlr) = heatmap_TPM_tlr$V1
+
+heatmap_TPM_tlr = as.data.frame(heatmap_TPM_tlr)
+heatmap_TPM_tlr = heatmap_TPM_tlr[order(heatmap_TPM_tlr$order),]
+```
+
+#### select order of columns
+```{r}
+heatmap_TPM_tlr_order = cbind(heatmap_TPM_tlr$M1_GM.CSF_0h, heatmap_TPM_tlr$M2_GM.CSF_0h, heatmap_TPM_tlr$M3_GM.CSF_0h, heatmap_TPM_tlr$M1_F.NANA_0h, heatmap_TPM_tlr$M2_F.NANA_0h, heatmap_TPM_tlr$M3_F.NANA_0h)
+rownames(heatmap_TPM_tlr_order) = rownames(heatmap_TPM_tlr)
+colnames(heatmap_TPM_tlr_order) = c("M1_GM.CSF_0h", "M2_GM.CSF_0h", "M3_GM.CSF_0h", "M1_F.NANA_0h", "M2_F.NANA_0h", "M3_F.NANA_0h")
+```
+
+#### plotting
+```{r, fig.width=3, fig.height=6}
+breaksList = seq(0, 1, by = 0.001)
+
+TPM_heat_tlr=pheatmap(heatmap_TPM_tlr_order, border_color = "black", scale = "row", cluster_rows = F, cluster_cols = F,
+         color = colorRampPalette(c("white", "darkgreen"))(1000),
+         breaks = breaksList)
+```
+
+```{r}
+pdf("~/Desktop/210531_tlr_rowScaled.pdf",width=2.3,height=4,paper='special') 
+TPM_heat_tlr
+dev.off()
+```
+
+```{r, fig.width=3, fig.height=6}
+breaksList = seq(0, 1200, by = 1)
+
+TPM_heat_tlr=pheatmap(heatmap_TPM_tlr_order, border_color = "black", cluster_rows = F, cluster_cols = F,
+         color = colorRampPalette(c("white", "darkgreen"))(1200),
+         breaks = breaksList)
+```
+
+```{r}
+pdf("~/Desktop/210520_tlr_rawTPM.pdf",width=2.3,height=4,paper='special') 
+TPM_heat_tlr
+dev.off()
+```
+
+```{r}
+heatmap_TPM_tlr_order_log = log2(heatmap_TPM_tlr_order)
+```
+
+```{r, fig.width=3, fig.height=6}
+breaksList = seq(0, 10, by = 0.001)
+
+TPM_heat_tlr=pheatmap(heatmap_TPM_tlr_order_log, border_color = "black", cluster_rows = F, cluster_cols = F,
+         color = colorRampPalette(c("white", "darkgreen"))(10000),
+         breaks = breaksList)
+```
+
+```{r}
+pdf("~/Desktop/210520_tlr_log2TPM.pdf",width=2.3,height=4,paper='special') 
+TPM_heat_tlr
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```
+
