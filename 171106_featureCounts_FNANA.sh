@@ -14,13 +14,14 @@ featureCounts \
 	-O \
 	--fraction \
 	-C \
-	-a ${GTF_PATH}/gencode.mouse.v1.annotation.gtf \
+	-a ${GTF_PATH}/gencode.vM15.annotation.noMYX.gtf \
 	-o ${OUTPUT_PATH}/171106_FNANA.readCount \
 	${BAM_PATH}/*.bam \
 	&> ${OUTPUT_PATH}/171106_FNANA.readCount.log
 
 
 #Readme
+#noMYX: X, Y, and mitochondrial genomes removed
 #-t: Specify feature type in GTF annotation.
 #-g: Specify attribute type in GTF annotation.
 #-s: Strandedness. Use '0' if not strand-specific.
